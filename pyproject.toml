@@ -1,0 +1,123 @@
+[project]
+name = "smart-chef-hr"
+version = "0.1.0"
+description = "Telegram bot for automated HoReCa recruitment — Smart Chef HR"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Smart Chef HR Team" }]
+license = { text = "Proprietary" }
+
+dependencies = [
+    # Bot framework
+    "aiogram>=3.13,<4.0",
+    # DB
+    "sqlalchemy[asyncio]>=2.0.30",
+    "asyncpg>=0.29.0",
+    "psycopg2-binary>=2.9.9",  # sync-driver для APScheduler.SQLAlchemyJobStore
+    "alembic>=1.13.2",
+    # Cache / FSM storage
+    "redis[hiredis]>=5.0.7",
+    # Config
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    # Scheduler
+    "apscheduler>=3.10.4",
+    # Google Sheets
+    "gspread>=6.1.2",
+    "google-auth>=2.32.0",
+    # NLP — лёгкая морфология для intent recognition
+    "pymorphy3>=2.0.2",
+    "pymorphy3-dicts-ru>=2.4",
+    # AI — Google Gemini API через REST. aiohttp идёт транзитом из aiogram,
+    # но фиксируем явно: services/gemini.py импортирует его напрямую.
+    # certifi — актуальный CA-бандл для TLS-проверки googleapis.com.
+    "aiohttp>=3.10",
+    "certifi>=2024.2.2",
+    # Logging
+    "structlog>=24.1.0",
+    "orjson>=3.10.6",
+    # Misc
+    "python-dateutil>=2.9.0",
+    "pytz>=2024.1",
+    "phonenumbers>=8.13.40",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.7",
+    "pytest-cov>=5.0.0",
+    "testcontainers[postgres]>=4.7.0",
+    "types-pytz",
+    "types-python-dateutil",
+]
+
+[project.scripts]
+smartchef = "app.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+# ── Ruff ──────────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "B",        # bugbear
+    "UP",       # pyupgrade
+    "SIM",      # simplify
+    "ASYNC",    # async best practices
+    "S",        # bandit
+    "C4",       # comprehensions
+    "PT",       # pytest style
+    "RUF",      # ruff-specific
+]
+ignore = [
+    "S101",     # assert (нужно для pytest)
+    "S105",     # hardcoded password strings (FK, не пароли)
+    "E501",     # длина строки (форматирует ruff format)
+    "RUF001",   # русскоязычные строки легитимны для продукта
+    "RUF002",   # русскоязычные docstring легитимны для продукта
+    "RUF003",   # русскоязычные комментарии легитимны для продукта
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S", "PT"]
+"alembic/**/*.py" = ["E", "F"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ── Mypy ──────────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["alembic/versions/"]
+
+[[tool.mypy.overrides]]
+module = ["gspread.*", "pymorphy3.*", "apscheduler.*"]
+ignore_missing_imports = true
+
+# ── Pytest ────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra -q --strict-markers"
+markers = [
+    "integration: requires postgres + redis",
+    "slow: slow tests (>1s)",
+]
