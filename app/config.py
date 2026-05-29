@@ -89,6 +89,19 @@ class Settings(BaseSettings):
             return None
         return v
 
+    @field_validator(
+        "google_sa_json_path",
+        "google_sheet_id",
+        "kaspi_merchant_id",
+        mode="before",
+    )
+    @classmethod
+    def _blank_optional_is_none(cls, v: object) -> object:
+        # Пустые optional-строки/пути из .env → None (иначе Path('') == Path('.')).
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
     @field_validator("admin_ids", mode="before")
     @classmethod
     def _parse_admin_ids(cls, v: object) -> object:

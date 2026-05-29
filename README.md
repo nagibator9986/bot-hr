@@ -70,13 +70,73 @@ make psql       # консоль PostgreSQL
 
 ## Railway
 
-Проект готовится как worker service: HTTP-порт и healthcheck не нужны, бот запускается polling-ом через Dockerfile.
+Бот деплоится как **worker-сервис** (long-polling, без HTTP-порта и healthcheck). Сборка через `Dockerfile`, миграции прогоняются как pre-deploy command.
 
-1. Создайте на Railway PostgreSQL и Redis services.
-2. В переменных bot service задайте `BOT_TOKEN`, `BOT_USERNAME`, `ADMIN_IDS`, `REDIS_URL`, `ENVIRONMENT=prod`, `LOG_LEVEL=INFO`.
-3. Для базы можно использовать стандартный `DATABASE_URL` Railway; приложение само преобразует его в `postgresql+asyncpg://` для async SQLAlchemy.
-4. Для Google Sheets на Railway используйте `GOOGLE_SA_JSON` или `GOOGLE_SA_JSON_B64`; локальный `GOOGLE_SA_JSON_PATH` оставлен для Docker Compose.
-5. `railway.json` включает Dockerfile build, `alembic upgrade head` как pre-deploy command и restart policy `ON_FAILURE`.
+### 1. Создайте проект и плагины
+
+В Railway dashboard:
+
+1. **New Project → Deploy from GitHub repo** → выберите этот репозиторий (ветка `main`).
+2. В проект добавьте плагины:
+   - **PostgreSQL** (`+ New → Database → PostgreSQL`) — даст `DATABASE_URL`.
+   - **Redis** (`+ New → Database → Redis`) — даст `REDIS_URL`.
+
+### 2. Привяжите переменные плагинов к сервису бота
+
+Откройте сервис бота → **Variables** → **Add Reference**:
+
+- `DATABASE_URL` → `${{Postgres.DATABASE_URL}}`
+- `REDIS_URL` → `${{Redis.REDIS_URL}}`
+
+Приложение само нормализует `postgres://…` в `postgresql+asyncpg://…` для async SQLAlchemy (`app/config.py:async_db_url`), а APScheduler получит sync-вариант через `sync_db_url`.
+
+### 3. Задайте остальные env vars
+
+Обязательные:
+
+| Переменная | Значение |
+|---|---|
+| `BOT_TOKEN` | токен от [@BotFather](https://t.me/BotFather) |
+| `BOT_USERNAME` | юзернейм бота без `@` |
+| `ADMIN_IDS` | `[123,456]` — список Telegram ID админов |
+| `ENVIRONMENT` | `prod` |
+| `LOG_LEVEL` | `INFO` |
+| `TIMEZONE` | `Asia/Almaty` |
+
+Опциональные (включают доп. функции):
+
+| Переменная | Зачем |
+|---|---|
+| `GEMINI_API_KEY` | включает AI-слой ([ai.google.dev](https://aistudio.google.com/apikey)); без ключа бот работает на правилах |
+| `GEMINI_MODEL` | по умолчанию `gemini-2.5-flash` |
+| `GOOGLE_SA_JSON` | весь JSON service-account одной строкой → зеркалирование в Google Sheets |
+| `GOOGLE_SA_JSON_B64` | альтернатива: base64 от JSON (удобнее для multiline-значений) |
+| `GOOGLE_SHEET_ID` | ID таблицы; без него Sheets-синк отключён |
+| `PAYMENT_PROVIDER` | `manual` / `telegram` / `kaspi` (по умолчанию `manual`) |
+
+> ⚠️ Не задавайте `DB_URL` и `GOOGLE_SA_JSON_PATH` на Railway — они нужны только для локального Docker Compose. Если они выставлены пустыми строками, приложение их корректно игнорирует.
+
+### 4. Запуск
+
+`railway.json` уже настроен:
+
+- **Build**: `Dockerfile` (multi-stage, non-root user, `tini` как PID 1).
+- **Pre-deploy**: `alembic upgrade head` — миграции прогоняются перед каждым деплоем.
+- **Start**: `python -m app` — long-polling bot.
+- **Restart**: `ON_FAILURE` (до 10 попыток), `drainingSeconds: 15` — даёт боту корректно закрыть Redis/Postgres/Bot-сессию по SIGTERM.
+
+Откройте **Deployments** — после первого пуша Railway сам соберёт образ, прогонит миграции и запустит бота. В логах должно появиться:
+
+```
+{"event": "starting", "env": "prod", "bot": "<your_bot>", "ai_enabled": <true/false>, ...}
+{"event": "scheduler started"}
+```
+
+### 5. Проверка
+
+- Напишите `/start` боту в Telegram.
+- В Railway logs смотрите structured-логи (`structlog` JSON).
+- Для `psql` к Postgres: Railway → Postgres plugin → **Connect → psql** (или через локальный `railway connect`).
 
 ## Тестовый режим
 
