@@ -10,6 +10,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from app.core.constants import HORECA_POSITIONS, Schedule, Tariff
 from app.keyboards.callbacks import (
     AboutPolishCB,
+    AdminMenuCB,
     BrowseCB,
     ConfirmCB,
     EditFieldCB,
@@ -218,3 +219,22 @@ def employer_moderation_keyboard(employer_id: int) -> InlineKeyboardMarkup:
 
 def url_button(text: str, url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=text, url=url)]])
+
+
+def admin_menu_keyboard() -> InlineKeyboardMarkup:
+    """Главное меню админа: одна кнопка — одно действие."""
+    builder = InlineKeyboardBuilder()
+    items = [
+        ("⏳ На модерации", "pending"),
+        ("🟢 Активные вакансии", "vac_active"),
+        ("⚪️ Закрытые вакансии", "vac_closed"),
+        ("🧑‍🍳 Соискатели", "candidates"),
+        ("💚 Отклики и матчи", "apps"),
+        ("💳 Подписки и оплаты", "subs"),
+        ("💸 Заявки на вывод", "payouts"),
+        ("❓ Подсказка по командам", "help"),
+    ]
+    for label, action in items:
+        builder.button(text=label, callback_data=AdminMenuCB(action=action))
+    builder.adjust(1)
+    return builder.as_markup()

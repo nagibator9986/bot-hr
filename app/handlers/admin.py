@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.constants import Tariff, VacancyStatus, VerificationStatus, WithdrawalStatus
 from app.db.models.employer import Employer
-from app.keyboards.callbacks import EmployerModerationCB
+from app.keyboards.callbacks import AdminMenuCB, EmployerModerationCB
+from app.keyboards.inline import admin_menu_keyboard
 from app.repositories.candidate import CandidateRepo
 from app.repositories.match import MatchRepo
 from app.repositories.referral import WithdrawalRepo
@@ -32,22 +33,54 @@ router.message.filter(F.from_user.id.in_(_ADMIN_IDS))
 router.callback_query.filter(F.from_user.id.in_(_ADMIN_IDS))
 
 
+_ADMIN_HELP_TEXT = (
+    "<b>🛡 Админ-панель</b>\n"
+    "Жмите кнопки ниже — или используйте команды:\n\n"
+    "/pending — работодатели на проверке\n"
+    "/candidates_active — активные соискатели\n"
+    "/vacancies_active — активные вакансии\n"
+    "/vacancies_closed — закрытые вакансии\n"
+    "/applications — кто откликнулся / взаимные интересы\n"
+    "/subscribers — активные подписки и недавние оплаты\n"
+    "/history <code>&lt;tg_id&gt; [limit]</code> — история диалога\n"
+    "/logic — где менять бизнес-логику\n"
+    "/grant <code>&lt;tg_id&gt; &lt;tariff&gt;</code> — выдать подписку\n"
+    "/payouts — список заявок на вывод\n"
+    "/paid <code>&lt;id&gt;</code> — пометить заявку выплаченной"
+)
+
+
 @router.message(Command("admin"))
 async def cmd_admin(message: Message) -> None:
-    await message.answer(
-        "<b>Админ-команды:</b>\n"
-        "/pending — работодатели на проверке\n"
-        "/candidates_active — активные соискатели\n"
-        "/vacancies_active — активные вакансии\n"
-        "/vacancies_closed — закрытые вакансии\n"
-        "/applications — кто откликнулся / взаимные интересы\n"
-        "/subscribers — активные подписки и недавние оплаты\n"
-        "/history <code>&lt;tg_id&gt; [limit]</code> — история диалога\n"
-        "/logic — где менять бизнес-логику\n"
-        "/grant <code>&lt;tg_id&gt; &lt;tariff&gt;</code> — выдать подписку\n"
-        "/payouts — список заявок на вывод\n"
-        "/paid <code>&lt;id&gt;</code> — пометить заявку выплаченной"
-    )
+    await message.answer(_ADMIN_HELP_TEXT, reply_markup=admin_menu_keyboard())
+
+
+@router.callback_query(AdminMenuCB.filter())
+async def on_admin_menu(
+    callback: CallbackQuery, callback_data: AdminMenuCB, session: AsyncSession
+) -> None:
+    """Маршрутизатор кнопок админ-меню — переиспользует те же функции, что и команды."""
+    await callback.answer()
+    msg = callback.message if isinstance(callback.message, Message) else None
+    if msg is None:
+        return
+    action = callback_data.action
+    if action == "pending":
+        await cmd_pending(msg, session)
+    elif action == "candidates":
+        await cmd_candidates_active(msg, session)
+    elif action == "vac_active":
+        await cmd_vacancies_active(msg, session)
+    elif action == "vac_closed":
+        await cmd_vacancies_closed(msg, session)
+    elif action == "apps":
+        await cmd_applications(msg, session)
+    elif action == "subs":
+        await cmd_subscribers(msg, session)
+    elif action == "payouts":
+        await cmd_payouts(msg, session)
+    elif action == "help":
+        await msg.answer(_ADMIN_HELP_TEXT, reply_markup=admin_menu_keyboard())
 
 
 # ──────────────────── Модерация работодателей (HR-проверка) ─────────────────

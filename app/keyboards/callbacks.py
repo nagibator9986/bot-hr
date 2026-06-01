@@ -83,3 +83,7 @@ class ReferralCB(CallbackData, prefix="ref"):
 class EmployerModerationCB(CallbackData, prefix="mod"):
     employer_id: int
     action: str  # "approve" | "reject"
+
+
+class AdminMenuCB(CallbackData, prefix="adm"):
+    action: str  # "pending" | "candidates" | "vac_active" | "vac_closed" | "apps" | "subs" | "payouts" | "help"
