@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import PaymentClaimStatus, Tariff
@@ -37,8 +37,14 @@ class PromoterRepo:
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def add_earned(self, promoter: Promoter, amount: int) -> None:
-        promoter.total_earned += amount
-        await self.session.flush()
+        """Атомарное начисление заработка промоутеру (без read-modify-write)."""
+        await self.session.execute(
+            update(Promoter)
+            .where(Promoter.id == promoter.id)
+            .values(total_earned=Promoter.total_earned + amount)
+            .execution_options(synchronize_session=False)
+        )
+        await self.session.refresh(promoter, ["total_earned"])
 
     async def bind_user(self, promoter: Promoter, user_id: int) -> None:
         promoter.user_id = user_id
@@ -81,9 +87,31 @@ class PromoCodeRepo:
         )
         return list((await self.session.execute(stmt)).scalars().all())
 
-    async def increment_used(self, promo: PromoCode) -> None:
-        promo.used_count += 1
-        await self.session.flush()
+    async def increment_used(self, promo: PromoCode) -> bool:
+        """Атомарно увеличивает счётчик активаций с учётом max_uses.
+
+        Возвращает False, если лимит уже исчерпан (например, параллельной
+        активацией) — вызывающий код обязан отказать в выдаче подписки.
+        """
+        row = (
+            await self.session.execute(
+                update(PromoCode)
+                .where(
+                    PromoCode.id == promo.id,
+                    or_(
+                        PromoCode.max_uses.is_(None),
+                        PromoCode.used_count < PromoCode.max_uses,
+                    ),
+                )
+                .values(used_count=PromoCode.used_count + 1)
+                .returning(PromoCode.id)
+                .execution_options(synchronize_session=False)
+            )
+        ).first()
+        if row is None:
+            return False
+        await self.session.refresh(promo, ["used_count"])
+        return True
 
 
 class PaymentClaimRepo:

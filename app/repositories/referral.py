@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from sqlalchemy import case as sa_case
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.constants import ReferralStatus, WithdrawalStatus
 from app.core.exceptions import (
     AlreadyReferredError,
+    InsufficientBalanceError,
     SelfReferralError,
 )
 from app.db.models.referral import Referral, ReferralBalance, WithdrawalRequest
@@ -155,17 +156,48 @@ class BalanceRepo:
         return result.scalar_one()
 
     async def credit(self, user_id: int, amount: int) -> ReferralBalance:
+        """Атомарное начисление: UPDATE ... SET balance = balance + :n.
+
+        Без read-modify-write — два одновременных начисления не теряются.
+        """
         balance = await self.get_or_create(user_id)
-        balance.balance += amount
-        balance.total_earned += amount
-        await self.session.flush()
+        await self.session.execute(
+            update(ReferralBalance)
+            .where(ReferralBalance.user_id == user_id)
+            .values(
+                balance=ReferralBalance.balance + amount,
+                total_earned=ReferralBalance.total_earned + amount,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        await self.session.refresh(balance, ["balance", "total_earned"])
         return balance
 
     async def debit(self, user_id: int, amount: int) -> ReferralBalance:
+        """Атомарное списание с защитой от ухода в минус при гонке.
+
+        Условие `balance >= amount` проверяется тем же UPDATE'ом; если средств
+        не хватило (параллельный вывод опередил) — бросаем InsufficientBalanceError.
+        """
         balance = await self.get_or_create(user_id)
-        balance.balance -= amount
-        balance.total_withdrawn += amount
-        await self.session.flush()
+        row = (
+            await self.session.execute(
+                update(ReferralBalance)
+                .where(
+                    ReferralBalance.user_id == user_id,
+                    ReferralBalance.balance >= amount,
+                )
+                .values(
+                    balance=ReferralBalance.balance - amount,
+                    total_withdrawn=ReferralBalance.total_withdrawn + amount,
+                )
+                .returning(ReferralBalance.id)
+                .execution_options(synchronize_session=False)
+            )
+        ).first()
+        if row is None:
+            raise InsufficientBalanceError()
+        await self.session.refresh(balance, ["balance", "total_withdrawn"])
         return balance
 
 

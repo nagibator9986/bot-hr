@@ -51,7 +51,10 @@ class PromoService:
         if payment is None:
             raise PromoAlreadyUsedError()
 
-        await self.codes.increment_used(promo)
+        # Атомарно занимаем слот промокода; проигравший гонку за последний слот
+        # max_uses получит отказ (вся транзакция, включая payment, откатится).
+        if not await self.codes.increment_used(promo):
+            raise PromoInvalidError()
         sub = await self.subscriptions.create(
             user_id=user_id,
             tariff=tariff,

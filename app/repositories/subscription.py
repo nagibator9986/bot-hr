@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,8 +52,14 @@ class SubscriptionRepo:
         return sub
 
     async def increment_viewed(self, sub: Subscription) -> None:
-        sub.candidates_viewed += 1
-        await self.session.flush()
+        """Атомарный инкремент счётчика просмотров (лимит работодателя, §10.7)."""
+        await self.session.execute(
+            update(Subscription)
+            .where(Subscription.id == sub.id)
+            .values(candidates_viewed=Subscription.candidates_viewed + 1)
+            .execution_options(synchronize_session=False)
+        )
+        await self.session.refresh(sub, ["candidates_viewed"])
 
     async def deactivate(self, sub: Subscription) -> None:
         sub.is_active = False
