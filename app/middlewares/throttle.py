@@ -1,27 +1,32 @@
-"""Простой throttle: не больше N апдейтов в M секунд на пользователя.
+"""Throttle на Redis: не больше N апдейтов в M секунд на пользователя.
 
-Хранит счётчики в памяти процесса (для прод-нагрузки заменить на Redis).
+Счётчик хранится в Redis (INCR + EXPIRE), а не в памяти процесса:
+  • переживает рестарт бота;
+  • не течёт по памяти (TTL сам удаляет ключи);
+  • общий для message и callback — оба инкрементируют один ключ, поэтому
+    реальный лимит не удваивается.
 """
 
 from __future__ import annotations
 
-import time
-from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject
+from redis.asyncio import Redis
 
 DEFAULT_LIMIT = 10
-DEFAULT_WINDOW = 5.0  # секунд
+DEFAULT_WINDOW = 5  # секунд
 
 
 class ThrottleMiddleware(BaseMiddleware):
-    def __init__(self, limit: int = DEFAULT_LIMIT, window: float = DEFAULT_WINDOW) -> None:
+    def __init__(
+        self, redis: Redis, *, limit: int = DEFAULT_LIMIT, window: int = DEFAULT_WINDOW
+    ) -> None:
+        self.redis = redis
         self.limit = limit
         self.window = window
-        self._buckets: dict[int, deque[float]] = defaultdict(deque)
 
     async def __call__(
         self,
@@ -33,17 +38,18 @@ class ThrottleMiddleware(BaseMiddleware):
         if user is None:
             return await handler(event, data)
 
-        now = time.monotonic()
-        bucket = self._buckets[user.id]
-        while bucket and now - bucket[0] > self.window:
-            bucket.popleft()
+        key = f"throttle:{user.id}"
+        count = await self.redis.incr(key)
+        # EXPIRE ... NX выставляет TTL только когда его ещё нет: один раз за окно
+        # и устойчиво к гонке «процесс умер между INCR и EXPIRE» (на следующем
+        # апдейте TTL доставится, ключ не зависнет навсегда).
+        await self.redis.expire(key, self.window, nx=True)
 
-        if len(bucket) >= self.limit:
+        if count > self.limit:
             if isinstance(event, CallbackQuery):
                 await event.answer("Слишком часто. Подождите немного.", show_alert=False)
             return None
 
-        bucket.append(now)
         return await handler(event, data)
 
 

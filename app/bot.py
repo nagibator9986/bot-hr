@@ -128,8 +128,10 @@ def build_dispatcher(redis: Redis) -> Dispatcher:
     dp.update.outer_middleware(DbSessionMiddleware())
     dp.update.outer_middleware(UserMiddleware())
     dp.update.outer_middleware(ConversationMiddleware())
-    dp.message.middleware(ThrottleMiddleware())
-    dp.callback_query.middleware(ThrottleMiddleware())
+    # Один инстанс на message и callback — общий счётчик в Redis, лимит не удваивается.
+    throttle = ThrottleMiddleware(redis)
+    dp.message.middleware(throttle)
+    dp.callback_query.middleware(throttle)
 
     # ── Routers (порядок важен) ───────────────────────────────────────────
     # FSM-формы выше меню; intent-fallback регистрируется последним.
