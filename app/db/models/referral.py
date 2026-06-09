@@ -23,18 +23,31 @@ if TYPE_CHECKING:
 
 
 class Referral(Base, TimestampMixin):
-    """Один кандидат привёл другого. Уникальная пара (referrer, referee)."""
+    """Кто-то привёл нового пользователя.
+
+    Источник — ровно один из двух: обычный пользователь (`referrer_id`) или
+    промоутер (`promoter_id`). Уникальность `referee_id` гарантирует один
+    источник на приглашённого, независимо от типа.
+    """
 
     __tablename__ = "referrals"
     __table_args__ = (
         UniqueConstraint("referrer_id", "referee_id", name="uq_referrer_referee"),
-        UniqueConstraint("referee_id", name="uq_referee_once"),  # один реферер на пользователя
+        UniqueConstraint("referee_id", name="uq_referee_once"),  # один источник на пользователя
         CheckConstraint("referrer_id <> referee_id", name="no_self_referral"),
+        # ровно один источник: либо обычный реферер, либо промоутер
+        CheckConstraint(
+            "(referrer_id IS NOT NULL) <> (promoter_id IS NOT NULL)",
+            name="exactly_one_source",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    referrer_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    referrer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    promoter_id: Mapped[int | None] = mapped_column(
+        ForeignKey("promoters.id", ondelete="CASCADE"), index=True
     )
     referee_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True

@@ -41,29 +41,25 @@ class PaymentService:
         self.subscriptions = SubscriptionRepo(session)
         self.payments = PaymentRepo(session)
 
-    async def create_payment_link(self, *, user_id: int, tariff: Tariff) -> str:
-        """Создаёт ссылку/QR для оплаты у провайдера.
+    def kaspi_link(self) -> str | None:
+        """Статическая ссылка/QR Kaspi для оплаты (одна на все тарифы)."""
+        return settings.kaspi_payment_url
 
-        MVP: provider=manual → возвращаем плейсхолдер. Для Telegram Payments/Kaspi
-        реализуй отдельный класс-провайдер (см. провайдер-паттерн).
+    async def confirm_kaspi_claim(
+        self, *, user_id: int, tariff: Tariff, claim_id: int
+    ) -> Subscription:
+        """Подтверждение оплаты Kaspi админом → активация подписки.
+
+        Идемпотентно по номеру заявки: повторное подтверждение не продлевает.
         """
         info = tariff_info(tariff)
-        if settings.payment_provider in {"manual", "simulation"}:
-            return f"https://example.com/pay?user={user_id}&amount={info.price}"
-        # TODO: подключить реальные провайдеры
-        raise NotImplementedError(f"Provider {settings.payment_provider} not implemented")
-
-    async def simulate_payment(self, *, user_id: int, tariff: Tariff) -> Subscription:
-        """Тестовая активация подписки без внешнего провайдера."""
-        info = tariff_info(tariff)
-        now = utcnow()
         return await self.confirm_payment(
             user_id=user_id,
             tariff=tariff,
-            provider="simulation",
-            provider_payment_id=f"simulation:{user_id}:{tariff.value}:{now.isoformat()}",
+            provider="kaspi",
+            provider_payment_id=f"kaspi:claim:{claim_id}",
             amount=info.price,
-            raw_payload='{"mode":"simulation"}',
+            raw_payload='{"mode":"kaspi_claim"}',
         )
 
     async def confirm_payment(

@@ -5,31 +5,84 @@
 
 from __future__ import annotations
 
-from contextlib import suppress
-
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.constants import Intent, Role
+from app.core.exceptions import AlreadyReferredError, SelfReferralError
+from app.core.logger import get_logger
 from app.db.models.user import User
 from app.handlers.browse import browse_candidates, browse_vacancies
 from app.handlers.ui import show_main_menu, start_candidate_form, start_employer_form
 from app.keyboards.callbacks import RoleCB
 from app.keyboards.inline import role_keyboard
 from app.locales import RU
+from app.repositories.promo import PromoterRepo
 from app.repositories.user import UserRepo
 from app.services.conversation import ConversationService
 from app.services.gemini import gemini
 from app.services.intent import detect_intent, resolve_intent
-from app.services.referrals import ReferralService, parse_start_param
+from app.services.notifications import NotificationService
+from app.services.referrals import (
+    ReferralService,
+    parse_promoter_param,
+    parse_start_param,
+)
 from app.services.roles import has_profile, preferred_role
+
+log = get_logger("common")
 
 router = Router(name="common")
 # Отдельный роутер для catch-all — регистрируется ПОСЛЕДНИМ (см. bot.py).
 fallback_router = Router(name="fallback")
+
+
+async def _attach_referrer(
+    message: Message, session: AsyncSession, *, referrer_id: int, referee: User
+) -> None:
+    """Привязывает реферера по ссылке и уведомляет его о новом друге.
+
+    Реферал не должен ломать /start: дубликат/самоприглашение — молча, любой
+    другой сбой — лог и продолжаем.
+    """
+    try:
+        await ReferralService(session).attach_referrer(
+            referrer_id=referrer_id, referee_id=referee.id
+        )
+    except (SelfReferralError, AlreadyReferredError):
+        return
+    except Exception as exc:  # реферал не критичен для /start
+        log.warning("referral_attach_failed", error=str(exc), referrer_id=referrer_id)
+        return
+
+    referrer = await UserRepo(session).get_by_id(referrer_id)
+    if referrer is not None:
+        await NotificationService(message.bot).send(  # type: ignore[arg-type]
+            referrer.tg_id,
+            RU["referral_new_signup"].format(bonus=settings.referral_bonus),
+        )
+
+
+async def _attach_promoter(
+    message: Message, session: AsyncSession, *, code: str, referee: User
+) -> None:
+    """Привязывает приглашённого к промоутеру по ссылке promo_<code>."""
+    promoter = await PromoterRepo(session).get_by_code(code)
+    if promoter is None or not promoter.is_active or promoter.user_id == referee.id:
+        return
+    try:
+        await ReferralService(session).attach_promoter(
+            promoter=promoter, referee_id=referee.id
+        )
+    except AlreadyReferredError:
+        return
+    except Exception as exc:  # промоутерский реферал не критичен для /start
+        log.warning("promoter_attach_failed", error=str(exc), code=code)
+
 
 async def _route_by_role(
     message: Message, state: FSMContext, session: AsyncSession, user: User
@@ -57,10 +110,13 @@ async def cmd_start(
 
     referrer_id = parse_start_param(command.args)
     if referrer_id is not None and referrer_id != user.id:
-        with suppress(Exception):
-            await ReferralService(session).attach_referrer(
-                referrer_id=referrer_id, referee_id=user.id
-            )
+        await _attach_referrer(
+            message, session, referrer_id=referrer_id, referee=user
+        )
+
+    promoter_code = parse_promoter_param(command.args)
+    if promoter_code is not None:
+        await _attach_promoter(message, session, code=promoter_code, referee=user)
 
     await _route_by_role(message, state, session, user)
 

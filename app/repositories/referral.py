@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import case as sa_case
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,11 +36,32 @@ class ReferralRepo:
             bonus_amount=bonus_amount,
             status=ReferralStatus.PENDING,
         )
-        self.session.add(ref)
+        # SAVEPOINT, а не session.rollback(): при дубликате откатываем только
+        # вставку реферала, не трогая остальную транзакцию /start
+        # (в частности, только что созданного UserMiddleware пользователя).
         try:
-            await self.session.flush()
+            async with self.session.begin_nested():
+                self.session.add(ref)
+                await self.session.flush()
         except IntegrityError as e:
-            await self.session.rollback()
+            raise AlreadyReferredError() from e
+        return ref
+
+    async def link_promoter(
+        self, *, promoter_id: int, referee_id: int, bonus_amount: int
+    ) -> Referral:
+        """Привязывает приглашённого к промоутеру (источник — промоутер, не юзер)."""
+        ref = Referral(
+            promoter_id=promoter_id,
+            referee_id=referee_id,
+            bonus_amount=bonus_amount,
+            status=ReferralStatus.PENDING,
+        )
+        try:
+            async with self.session.begin_nested():
+                self.session.add(ref)
+                await self.session.flush()
+        except IntegrityError as e:
             raise AlreadyReferredError() from e
         return ref
 
@@ -50,6 +72,63 @@ class ReferralRepo:
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def count_for_referrer(self, referrer_id: int) -> tuple[int, int]:
+        """(всего приглашено, из них оформили подписку) для реферера."""
+        total = await self.session.scalar(
+            select(func.count())
+            .select_from(Referral)
+            .where(Referral.referrer_id == referrer_id)
+        )
+        granted = await self.session.scalar(
+            select(func.count())
+            .select_from(Referral)
+            .where(
+                Referral.referrer_id == referrer_id,
+                Referral.status == ReferralStatus.GRANTED,
+            )
+        )
+        return int(total or 0), int(granted or 0)
+
+    async def count_for_promoter(self, promoter_id: int) -> tuple[int, int]:
+        """(всего привёл, из них оплатили) для промоутера."""
+        total = await self.session.scalar(
+            select(func.count())
+            .select_from(Referral)
+            .where(Referral.promoter_id == promoter_id)
+        )
+        granted = await self.session.scalar(
+            select(func.count())
+            .select_from(Referral)
+            .where(
+                Referral.promoter_id == promoter_id,
+                Referral.status == ReferralStatus.GRANTED,
+            )
+        )
+        return int(total or 0), int(granted or 0)
+
+    async def top_referrers(self, *, limit: int = 20) -> list[tuple[int, int, int]]:
+        """[(referrer_id, всего, оплатили), ...] — обычные пользователи, по убыванию."""
+        granted_case = func.sum(
+            sa_case((Referral.status == ReferralStatus.GRANTED, 1), else_=0)
+        )
+        stmt = (
+            select(Referral.referrer_id, func.count(), granted_case)
+            .where(Referral.referrer_id.is_not(None))
+            .group_by(Referral.referrer_id)
+            .order_by(func.count().desc())
+            .limit(limit)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return [(int(r[0]), int(r[1]), int(r[2] or 0)) for r in rows]
+
+    async def list_for_referrer(self, referrer_id: int) -> list[Referral]:
+        stmt = (
+            select(Referral)
+            .where(Referral.referrer_id == referrer_id)
+            .order_by(Referral.created_at.desc())
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
 
     async def mark_granted(self, ref: Referral) -> None:
         from app.utils.time import utcnow

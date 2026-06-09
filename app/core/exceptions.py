@@ -61,6 +61,21 @@ class InsufficientBalanceError(ReferralError):
     user_message = "На балансе недостаточно средств для вывода."
 
 
+# ── Промокоды ─────────────────────────────────────────────────────────────
+class PromoError(SmartChefError):
+    code = "promo_error"
+
+
+class PromoInvalidError(PromoError):
+    code = "promo_invalid"
+    user_message = "Промокод не найден, истёк или больше не действует."
+
+
+class PromoAlreadyUsedError(PromoError):
+    code = "promo_already_used"
+    user_message = "Вы уже активировали этот промокод."
+
+
 # ── Матчинг и собеседования ───────────────────────────────────────────────
 class NoMatchesFoundError(SmartChefError):
     code = "no_matches"

@@ -18,6 +18,7 @@ from app.keyboards.callbacks import (
     InterviewCB,
     InterviewSlotCB,
     PaymentCB,
+    PaymentClaimCB,
     PositionCB,
     ReferralCB,
     RoleCB,
@@ -142,15 +143,33 @@ def tariff_keyboard(for_role: str) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def pay_now_keyboard(tariff: Tariff, *, simulate: bool = False) -> InlineKeyboardMarkup:
+def pay_now_keyboard(tariff: Tariff, *, kaspi_url: str | None) -> InlineKeyboardMarkup:
+    """Карточка тарифа: оплата через Kaspi → «Я оплатил» → или промокод."""
+    builder = InlineKeyboardBuilder()
+    if kaspi_url:
+        builder.button(text=RU["pay_kaspi"], url=kaspi_url)
+    builder.button(
+        text=RU["pay_done"], callback_data=PaymentCB(tariff=tariff.value, action="claim")
+    )
+    builder.button(
+        text=RU["pay_promo"], callback_data=PaymentCB(tariff=tariff.value, action="promo")
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def payment_claim_keyboard(claim_id: int) -> InlineKeyboardMarkup:
+    """Кнопки админа под заявкой «Я оплатил»."""
     builder = InlineKeyboardBuilder()
     builder.button(
-        text=RU["pay_simulate"] if simulate else RU["pay_now"],
-        callback_data=PaymentCB(
-            tariff=tariff.value,
-            action="simulate" if simulate else "start",
-        ),
+        text=RU["claim_approve"],
+        callback_data=PaymentClaimCB(claim_id=claim_id, action="approve"),
     )
+    builder.button(
+        text=RU["claim_reject"],
+        callback_data=PaymentClaimCB(claim_id=claim_id, action="reject"),
+    )
+    builder.adjust(2)
     return builder.as_markup()
 
 

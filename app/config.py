@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     telegram_payment_token: SecretStr | None = None
     kaspi_api_key: SecretStr | None = None
     kaspi_merchant_id: str | None = None
+    # Статическая ссылка/QR Kaspi для оплаты подписки. Подтверждение оплаты —
+    # ручное: пользователь жмёт «Я оплатил», админ подтверждает.
+    kaspi_payment_url: str | None = None
 
     # ── Tariffs (KZT/month) ───────────────────────────────────────────────
     tariff_candidate: int = 1_000
@@ -49,7 +52,8 @@ class Settings(BaseSettings):
     employer_extended_limit: int = 50
 
     # ── Referral ──────────────────────────────────────────────────────────
-    referral_bonus: int = 300
+    referral_bonus: int = 300              # обычный пользователь привёл друга
+    referral_bonus_promoter: int = 1_000   # промоутер (сотрудник) привёл друга
     referral_min_withdrawal: int = 1_000
     referral_withdrawal_delay_hours: int = 24
 
@@ -93,6 +97,7 @@ class Settings(BaseSettings):
         "google_sa_json_path",
         "google_sheet_id",
         "kaspi_merchant_id",
+        "kaspi_payment_url",
         mode="before",
     )
     @classmethod

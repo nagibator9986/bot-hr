@@ -5,7 +5,8 @@ from app.db.models.conversation import ConversationMessage
 from app.db.models.employer import Employer
 from app.db.models.interview import Interview
 from app.db.models.match import Match
-from app.db.models.payment import Payment
+from app.db.models.payment import Payment, PaymentClaim
+from app.db.models.promo import PromoCode, Promoter
 from app.db.models.referral import Referral, ReferralBalance, WithdrawalRequest
 from app.db.models.subscription import Subscription
 from app.db.models.user import User
@@ -18,6 +19,9 @@ __all__ = [
     "Interview",
     "Match",
     "Payment",
+    "PaymentClaim",
+    "PromoCode",
+    "Promoter",
     "Referral",
     "ReferralBalance",
     "Subscription",

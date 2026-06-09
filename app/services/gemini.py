@@ -40,7 +40,7 @@ import aiohttp
 import certifi
 
 from app.config import settings
-from app.core.constants import HORECA_POSITIONS, Intent
+from app.core.constants import COMPANY_INFO, HORECA_POSITIONS, Intent
 from app.core.logger import get_logger
 
 log = get_logger("gemini")
@@ -445,16 +445,14 @@ class GeminiService:
             return cached or None
 
         system = (
-            "Ты — поддержка Telegram-бота «Smart Chef HR» для подбора персонала "
-            "в общепите (HoReCa). Возможности бота:\n"
-            "• соискатель заполняет анкету и листает вакансии, работодатель — "
-            "создаёт вакансии и листает кандидатов; взаимный лайк открывает контакты;\n"
-            "• собеседование назначается автоматически, бот шлёт напоминания;\n"
-            "• подписка: кандидат 1000 ₸/мес, работодатель 10000/20000 ₸/мес;\n"
-            "• реферальная программа: 300 ₸ за друга, оформившего подписку.\n"
-            "Команды: /menu /search /profile /subscription /invite /help.\n"
-            "Отвечай кратко (2-4 предложения), дружелюбно, по-русски, только по теме "
-            "бота. Если вопрос не по теме — мягко верни человека к меню (/menu)."
+            "Ты — поддержка и консультант Telegram-бота «Smart Chef HR». "
+            "Отвечай на вопросы пользователей о работе бота, о компании, тарифах, "
+            "оплате и реферальной программе — опираясь на справку ниже.\n\n"
+            f"=== Справка о сервисе ===\n{COMPANY_INFO}\n=== конец справки ===\n\n"
+            "Команды бота: /menu /search /profile /subscription /invite /help.\n"
+            "Отвечай кратко (2-4 предложения), дружелюбно, по-русски и только по "
+            "теме бота и компании. Не выдумывай фактов, которых нет в справке. "
+            "Если вопрос не по теме — мягко верни человека к меню (/menu)."
         )
         prompt = question.strip()
         if context:

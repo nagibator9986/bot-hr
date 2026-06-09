@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import secrets
+
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -10,19 +12,31 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.constants import Tariff, VacancyStatus, VerificationStatus, WithdrawalStatus
+from app.core.constants import (
+    PaymentClaimStatus,
+    ReferralStatus,
+    Tariff,
+    VacancyStatus,
+    VerificationStatus,
+    WithdrawalStatus,
+)
+from app.core.exceptions import DuplicatePaymentError
 from app.db.models.employer import Employer
-from app.keyboards.callbacks import AdminMenuCB, EmployerModerationCB
+from app.db.models.user import User
+from app.keyboards.callbacks import AdminMenuCB, EmployerModerationCB, PaymentClaimCB
 from app.keyboards.inline import admin_menu_keyboard
+from app.locales import RU
 from app.repositories.candidate import CandidateRepo
 from app.repositories.match import MatchRepo
-from app.repositories.referral import WithdrawalRepo
+from app.repositories.promo import PaymentClaimRepo, PromoCodeRepo, PromoterRepo
+from app.repositories.referral import ReferralRepo, WithdrawalRepo
 from app.repositories.subscription import PaymentRepo, SubscriptionRepo
 from app.repositories.user import UserRepo
 from app.repositories.vacancy import EmployerRepo, VacancyRepo
 from app.services.conversation import ConversationService
-from app.services.payments import PaymentService
-from app.services.referrals import ReferralService
+from app.services.notifications import NotificationService
+from app.services.payments import PaymentService, tariff_info
+from app.services.referrals import ReferralService, make_promoter_link
 from app.services.verification import VerificationService
 from app.states.employer import RejectReason
 from app.utils.validators import clean_text
@@ -46,7 +60,14 @@ _ADMIN_HELP_TEXT = (
     "/logic — где менять бизнес-логику\n"
     "/grant <code>&lt;tg_id&gt; &lt;tariff&gt;</code> — выдать подписку\n"
     "/payouts — список заявок на вывод\n"
-    "/paid <code>&lt;id&gt;</code> — пометить заявку выплаченной"
+    "/paid <code>&lt;id&gt;</code> — пометить заявку выплаченной\n"
+    "\n<b>Промокоды и промоутеры</b>\n"
+    "/promo_new <code>&lt;tariff&gt; &lt;days&gt; [max_uses]</code> — создать промокод\n"
+    "/promos — активные промокоды\n"
+    "/promoter_new <code>&lt;имя&gt; [tg_id]</code> — создать промоутера (ссылка 1000 ₸)\n"
+    "/promoters — промоутеры и их статистика\n"
+    "/referrals — кто сколько привёл (топ)\n"
+    "/invited_by <code>&lt;tg_id&gt;</code> — кого привёл конкретный человек"
 )
 
 
@@ -360,3 +381,209 @@ async def cmd_paid(message: Message, session: AsyncSession) -> None:
         return
     await repo.set_status(req, WithdrawalStatus.PAID)
     await message.answer(f"✅ Заявка #{req.id} помечена как выплаченная.")
+
+
+# ──────────────────── Подтверждение оплаты Kaspi (заявки) ───────────────────
+@router.callback_query(PaymentClaimCB.filter(F.action == "approve"))
+async def on_claim_approve(
+    callback: CallbackQuery, callback_data: PaymentClaimCB, session: AsyncSession, user: User
+) -> None:
+    claims = PaymentClaimRepo(session)
+    claim = await claims.get(callback_data.claim_id)
+    if claim is None or claim.status != PaymentClaimStatus.PENDING:
+        await callback.answer("Заявка уже обработана.", show_alert=True)
+        return
+
+    target = await UserRepo(session).get_by_id(claim.user_id)
+    try:
+        sub = await PaymentService(session).confirm_kaspi_claim(
+            user_id=claim.user_id, tariff=Tariff(claim.tariff), claim_id=claim.id
+        )
+    except DuplicatePaymentError:
+        await claims.set_status(claim, PaymentClaimStatus.APPROVED, admin_id=user.id)
+        await callback.answer("Эта оплата уже была подтверждена.", show_alert=True)
+        return
+
+    await claims.set_status(claim, PaymentClaimStatus.APPROVED, admin_id=user.id)
+    # Реферальный бонус — только за реальную оплату (Kaspi), здесь и начисляем.
+    await ReferralService(session).grant_on_payment(claim.user_id)
+
+    if target is not None:
+        await NotificationService(callback.bot).send(  # type: ignore[arg-type]
+            target.tg_id,
+            RU["payment_confirmed_user"].format(until=sub.expires_at.strftime("%Y-%m-%d")),
+        )
+    await callback.answer("Оплата подтверждена ✅")
+    if isinstance(callback.message, Message):
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(
+            f"✅ Оплата подтверждена для tg={target.tg_id if target else '?'}."
+        )
+
+
+@router.callback_query(PaymentClaimCB.filter(F.action == "reject"))
+async def on_claim_reject(
+    callback: CallbackQuery, callback_data: PaymentClaimCB, session: AsyncSession, user: User
+) -> None:
+    claims = PaymentClaimRepo(session)
+    claim = await claims.get(callback_data.claim_id)
+    if claim is None or claim.status != PaymentClaimStatus.PENDING:
+        await callback.answer("Заявка уже обработана.", show_alert=True)
+        return
+    await claims.set_status(claim, PaymentClaimStatus.REJECTED, admin_id=user.id)
+    target = await UserRepo(session).get_by_id(claim.user_id)
+    if target is not None:
+        await NotificationService(callback.bot).send(  # type: ignore[arg-type]
+            target.tg_id, RU["payment_rejected_user"]
+        )
+    await callback.answer("Отклонено")
+    if isinstance(callback.message, Message):
+        await callback.message.edit_reply_markup(reply_markup=None)
+
+
+# ──────────────────────────── Промокоды ─────────────────────────────────────
+@router.message(Command("promo_new"))
+async def cmd_promo_new(message: Message, session: AsyncSession) -> None:
+    """/promo_new <tariff> <days> [max_uses]"""
+    parts = (message.text or "").split()
+    if len(parts) < 3:
+        await message.answer(
+            "Использование: /promo_new <tariff> <days> [max_uses]\n"
+            "tariff: candidate | employer_basic | employer_extended"
+        )
+        return
+    try:
+        tariff = Tariff(parts[1])
+        days = int(parts[2])
+        max_uses = int(parts[3]) if len(parts) >= 4 else None
+    except (ValueError, KeyError):
+        await message.answer("Неверный формат.")
+        return
+    code = secrets.token_hex(3).upper()
+    promo = await PromoCodeRepo(session).create(
+        code=code, tariff=tariff, duration_days=days, max_uses=max_uses
+    )
+    await message.answer(
+        f"🎟 Промокод <code>{promo.code}</code>\n"
+        f"Тариф: {tariff_info(tariff).label} · {days} дн · "
+        f"лимит: {max_uses if max_uses is not None else '∞'}"
+    )
+
+
+@router.message(Command("promos"))
+async def cmd_promos(message: Message, session: AsyncSession) -> None:
+    items = await PromoCodeRepo(session).list_active()
+    if not items:
+        await message.answer("Активных промокодов нет.")
+        return
+    lines = [
+        f"<code>{p.code}</code> · {p.tariff} · {p.duration_days} дн · "
+        f"использован {p.used_count}/{p.max_uses if p.max_uses is not None else '∞'}"
+        for p in items
+    ]
+    await message.answer("🎟 <b>Промокоды</b>\n\n" + "\n".join(lines))
+
+
+# ──────────────────────────── Промоутеры ────────────────────────────────────
+@router.message(Command("promoter_new"))
+async def cmd_promoter_new(message: Message, session: AsyncSession) -> None:
+    """/promoter_new <имя> [tg_id] — создаёт промоутера с повышенным бонусом."""
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        await message.answer("Использование: /promoter_new <имя> [tg_id]")
+        return
+    name = parts[1]
+    user_id: int | None = None
+    if len(parts) >= 3 and parts[2].lstrip("-").isdigit():
+        bound = await UserRepo(session).get_by_tg_id(int(parts[2]))
+        if bound is None:
+            await message.answer(
+                "Этот tg_id ещё не писал боту. Пусть сотрудник нажмёт /start, "
+                "или создайте без tg_id и привяжите позже."
+            )
+            return
+        user_id = bound.id
+    code = secrets.token_hex(4)
+    promoter = await PromoterRepo(session).create(
+        name=name,
+        code=code,
+        bonus_amount=settings.referral_bonus_promoter,
+        user_id=user_id,
+    )
+    link = make_promoter_link(settings.bot_username, code)
+    await message.answer(
+        f"✅ Промоутер «{promoter.name}» создан.\n"
+        f"Бонус за приглашённого: <b>{int(promoter.bonus_amount)} ₸</b>\n"
+        f"{'Привязан к аккаунту.' if user_id else 'Без аккаунта — выплата вручную.'}\n\n"
+        f"Промо-ссылка:\n<code>{link}</code>"
+    )
+
+
+@router.message(Command("promoters"))
+async def cmd_promoters(message: Message, session: AsyncSession) -> None:
+    promoters = await PromoterRepo(session).list_all()
+    if not promoters:
+        await message.answer("Промоутеров пока нет. Создайте — /promoter_new.")
+        return
+    refs = ReferralRepo(session)
+    lines = []
+    for p in promoters:
+        total, granted = await refs.count_for_promoter(p.id)
+        link = make_promoter_link(settings.bot_username, p.code)
+        lines.append(
+            f"#{p.id} <b>{p.name}</b> · бонус {int(p.bonus_amount)} ₸\n"
+            f"привёл: {total} · оплатили: {granted} · заработал: {int(p.total_earned)} ₸\n"
+            f"<code>{link}</code>"
+        )
+    await message.answer("👥 <b>Промоутеры</b>\n\n" + "\n\n".join(lines))
+
+
+# ──────────────────── Отслеживание приглашений ──────────────────────────────
+@router.message(Command("referrals"))
+async def cmd_referrals(message: Message, session: AsyncSession) -> None:
+    refs = ReferralRepo(session)
+    users = UserRepo(session)
+    top = await refs.top_referrers(limit=20)
+    if not top:
+        await message.answer("Приглашений от пользователей ещё нет.")
+        return
+    lines = []
+    for referrer_id, total, granted in top:
+        owner = await users.get_by_id(referrer_id)
+        if owner is not None:
+            who = f"tg={owner.tg_id}" + (f" @{owner.tg_username}" if owner.tg_username else "")
+        else:
+            who = f"id={referrer_id}"
+        lines.append(f"{who}: привёл {total}, оплатили {granted}")
+    await message.answer("👥 <b>Кто сколько привёл</b>\n\n" + "\n".join(lines))
+
+
+@router.message(Command("invited_by"))
+async def cmd_invited_by(message: Message, session: AsyncSession) -> None:
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        await message.answer("Использование: /invited_by <tg_id>")
+        return
+    try:
+        tg_id = int(parts[1])
+    except ValueError:
+        await message.answer("Неверный формат.")
+        return
+    users = UserRepo(session)
+    owner = await users.get_by_tg_id(tg_id)
+    if owner is None:
+        await message.answer("Пользователь не найден.")
+        return
+    items = await ReferralRepo(session).list_for_referrer(owner.id)
+    if not items:
+        await message.answer("Этот пользователь ещё никого не привёл.")
+        return
+    lines = []
+    for ref in items:
+        referee = await users.get_by_id(ref.referee_id)
+        tg = referee.tg_id if referee is not None else "?"
+        status = "✅ оплатил" if ref.status == ReferralStatus.GRANTED else "⏳ ждём оплаты"
+        lines.append(f"tg={tg} · {status}")
+    await message.answer(
+        f"👤 Привёл tg={tg_id} (всего {len(items)}):\n\n" + "\n".join(lines)
+    )

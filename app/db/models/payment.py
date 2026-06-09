@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Numeric, String
+from datetime import datetime
+
+from sqlalchemy import DateTime, ForeignKey, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.constants import PaymentPurpose, PaymentStatus, Tariff
+from app.core.constants import PaymentClaimStatus, PaymentPurpose, PaymentStatus, Tariff
 from app.db.base import Base, TimestampMixin
 
 
@@ -41,3 +43,28 @@ class Payment(Base, TimestampMixin):
 
     def __repr__(self) -> str:
         return f"<Payment id={self.id} user={self.user_id} {self.amount}{self.currency}>"
+
+
+class PaymentClaim(Base, TimestampMixin):
+    """Заявка «Я оплатил через Kaspi». Ждёт ручного подтверждения админом.
+
+    Статическая Kaspi-ссылка не уведомляет бота об оплате, поэтому факт оплаты
+    подтверждает админ: при approve создаётся реальный Payment + подписка.
+    """
+
+    __tablename__ = "payment_claims"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tariff: Mapped[Tariff] = mapped_column(String(32), nullable=False)
+    amount: Mapped[int] = mapped_column(Numeric(10, 0), nullable=False)
+    status: Mapped[PaymentClaimStatus] = mapped_column(
+        String(16), default=PaymentClaimStatus.PENDING, nullable=False, index=True
+    )
+    admin_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    def __repr__(self) -> str:
+        return f"<PaymentClaim id={self.id} user={self.user_id} status={self.status}>"

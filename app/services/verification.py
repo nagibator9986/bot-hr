@@ -71,8 +71,20 @@ class VerificationService:
             position=position_label(vacancy.position_normalized, vacancy.position),
         )
         kb = employer_moderation_keyboard(employer.id)
+        delivered = 0
         for admin_id in settings.admin_ids:
-            await notifier.send(admin_id, text, reply_markup=kb)
+            if await notifier.send(admin_id, text, reply_markup=kb):
+                delivered += 1
+        if delivered == 0:
+            # Ни один админ не получил заявку — почти всегда потому, что админы
+            # не нажимали Start у бота (Telegram не даёт боту писать первым).
+            # Заявка всё равно лежит в БД и видна по /pending.
+            log.error(
+                "admin_notify_failed",
+                employer_id=employer.id,
+                admins=len(settings.admin_ids),
+                hint="admins must press Start in the bot; queue still visible via /pending",
+            )
 
     async def approve(self, bot: Bot, employer: Employer) -> None:
         await self._approve_internal(bot, employer, announce=True)

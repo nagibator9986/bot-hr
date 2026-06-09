@@ -23,10 +23,13 @@ router = Router(name="referral")
 
 @router.message(Command("invite", "referral"))
 @router.message(F.text == RU["btn_invite"])
-async def cmd_invite(message: Message, user: User) -> None:
+async def cmd_invite(message: Message, session: AsyncSession, user: User) -> None:
+    invited, granted, balance = await ReferralService(session).referrer_stats(user.id)
     link = make_referral_link(settings.bot_username, user.id)
     await message.answer(
-        RU["referral_card"].format(link=link),
+        RU["referral_card"].format(
+            link=link, invited=invited, granted=granted, balance=balance
+        ),
         reply_markup=referral_keyboard(),
     )
 

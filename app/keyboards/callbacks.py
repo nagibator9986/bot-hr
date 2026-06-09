@@ -73,7 +73,12 @@ class TariffCB(CallbackData, prefix="tariff"):
 
 class PaymentCB(CallbackData, prefix="pay"):
     tariff: str
-    action: str  # "start" | "check"
+    action: str  # "claim" (я оплатил Kaspi) | "promo" (ввести промокод)
+
+
+class PaymentClaimCB(CallbackData, prefix="paycl"):
+    claim_id: int
+    action: str  # "approve" | "reject"
 
 
 class ReferralCB(CallbackData, prefix="ref"):
