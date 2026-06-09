@@ -8,7 +8,6 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -21,7 +20,6 @@ from app.core.constants import (
     WithdrawalStatus,
 )
 from app.core.exceptions import DuplicatePaymentError
-from app.db.models.employer import Employer
 from app.db.models.user import User
 from app.keyboards.callbacks import AdminMenuCB, EmployerModerationCB, PaymentClaimCB
 from app.keyboards.inline import admin_menu_keyboard
@@ -109,10 +107,7 @@ async def on_admin_menu(
 async def cmd_pending(message: Message, session: AsyncSession) -> None:
     from app.keyboards.inline import employer_moderation_keyboard
 
-    stmt = select(Employer).where(
-        Employer.verification_status == VerificationStatus.PENDING
-    )
-    employers = list((await session.execute(stmt)).scalars().all())
+    employers = await EmployerRepo(session).list_pending()
     if not employers:
         await message.answer("Заявок на проверку нет.")
         return

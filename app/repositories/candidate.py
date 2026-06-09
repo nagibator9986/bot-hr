@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.constants import CandidateStatus
 from app.db.models.candidate import Candidate
@@ -39,12 +40,18 @@ class CandidateRepo:
         Зарплата, опыт и график оцениваются в matching.score_pair — здесь не
         фильтруются, чтобы HR и кандидат видели согласованные результаты.
         """
-        stmt = select(Candidate).where(
-            Candidate.city == city,
-            Candidate.position_normalized == position_normalized,
-            Candidate.status.in_(
-                [CandidateStatus.NEW, CandidateStatus.SEARCHING, CandidateStatus.OFFERED]
-            ),
+        stmt = (
+            select(Candidate)
+            .where(
+                Candidate.city == city,
+                Candidate.position_normalized == position_normalized,
+                Candidate.status.in_(
+                    [CandidateStatus.NEW, CandidateStatus.SEARCHING, CandidateStatus.OFFERED]
+                ),
+            )
+            # Eager-load User: карточка кандидата и уведомления читают candidate.user
+            # (tg_id) уже вне сессии — без этого ленивая загрузка падает в async.
+            .options(selectinload(Candidate.user))
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())

@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.constants import VacancyStatus
+from app.core.constants import VacancyStatus, VerificationStatus
 from app.db.models.employer import Employer
 from app.db.models.vacancy import Vacancy
 
@@ -21,6 +21,17 @@ class EmployerRepo:
 
     async def get_by_id(self, employer_id: int) -> Employer | None:
         return await self.session.get(Employer, employer_id)
+
+    async def list_pending(self, *, limit: int = 50) -> list[Employer]:
+        """Работодатели, ожидающие HR-проверки (verification_status = pending)."""
+        stmt = (
+            select(Employer)
+            .where(Employer.verification_status == VerificationStatus.PENDING)
+            .order_by(Employer.created_at)
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
 
     async def upsert(self, user_id: int, **fields: object) -> Employer:
         employer = await self.get_by_user_id(user_id)
