@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import CandidateStatus, Reaction, Role
+from app.core.exceptions import CandidateLimitReachedError
 from app.db.models.match import Match
 from app.db.models.subscription import Subscription
 from app.db.models.user import User
@@ -64,10 +65,8 @@ async def browse_candidates(message: Message, session: AsyncSession, user: User)
     await message.answer(RU["browse_start_employer"])
     access = AccessControlService(session)
     full_access = await access.has_full_access(user.id)
-    sub = None
-    if full_access:
-        sub = await access.can_view_candidate(user.id)
-        await _consume_employer_view_if_needed(access, card.match, sub)
+    if not await _gate_employer_card(message, access, card, user.id, full_access=full_access):
+        return
     await _send_card(message, card, Role.EMPLOYER, full_access=full_access)
 
 
@@ -133,9 +132,8 @@ async def _send_next(message: Message, session: AsyncSession, user: User) -> Non
             return
         access = AccessControlService(session)
         full_access = await access.has_full_access(user.id)
-        if full_access:
-            sub = await access.can_view_candidate(user.id)
-            await _consume_employer_view_if_needed(access, card.match, sub)
+        if not await _gate_employer_card(message, access, card, user.id, full_access=full_access):
+            return
         await _send_card(message, card, Role.EMPLOYER, full_access=full_access)
     else:
         candidate = await CandidateRepo(session).get_by_user_id(user.id)
@@ -241,6 +239,33 @@ async def _announce_mutual(
                 else tariff_keyboard("employer")
             ),
         )
+
+
+async def _gate_employer_card(
+    message: Message,
+    access: AccessControlService,
+    card: Card,
+    user_id: int,
+    *,
+    full_access: bool,
+) -> bool:
+    """Проверяет лимит просмотров перед показом карточки работодателю.
+
+    Возвращает False и предлагает апгрейд, если лимит тарифа исчерпан — карточку
+    показывать не нужно. Важно: ошибка лимита больше НЕ всплывает в глобальный
+    on_error (который откатывал бы транзакцию вместе с реакцией и инкрементом).
+    """
+    if not full_access:
+        return True
+    try:
+        sub = await access.can_view_candidate(user_id)
+    except CandidateLimitReachedError:
+        await message.answer(
+            RU["browse_limit_reached"], reply_markup=tariff_keyboard("employer")
+        )
+        return False
+    await _consume_employer_view_if_needed(access, card.match, sub)
+    return True
 
 
 async def _consume_employer_view_if_needed(
