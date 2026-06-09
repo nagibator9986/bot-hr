@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+
 import pytest
 from app.core.constants import Tariff
 from app.core.exceptions import DuplicatePaymentError
-from app.services.payments import PaymentService, tariff_info
+from app.services.payments import PaymentService, tariff_info, verify_hmac_signature
 
 from tests.fakes import FakePaymentRepo, FakeSession, FakeSubscriptionRepo
 
@@ -67,3 +70,23 @@ async def test_confirm_kaspi_claim_uses_claim_scoped_id() -> None:
     sub = await svc.confirm_kaspi_claim(user_id=3, tariff=Tariff.CANDIDATE, claim_id=42)
     assert sub.user_id == 3
     assert "kaspi:claim:42" in svc.payments.seen  # type: ignore[attr-defined]
+
+
+# ── Проверка подписи вебхука (готовность к авто-платежам, CLAUDE.md §9) ──────
+def test_verify_hmac_signature_accepts_valid() -> None:
+    payload, secret = b'{"event":"paid"}', "topsecret"
+    sig = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+    assert verify_hmac_signature(payload=payload, signature=sig, secret=secret) is True
+
+
+def test_verify_hmac_signature_rejects_tampered_payload() -> None:
+    secret = "topsecret"
+    sig = hmac.new(secret.encode(), b'{"amount":1000}', hashlib.sha256).hexdigest()
+    assert (
+        verify_hmac_signature(payload=b'{"amount":999999}', signature=sig, secret=secret)
+        is False
+    )
+
+
+def test_verify_hmac_signature_rejects_empty() -> None:
+    assert verify_hmac_signature(payload=b"x", signature="", secret="s") is False

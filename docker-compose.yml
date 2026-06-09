@@ -6,7 +6,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: smartchef
-      POSTGRES_PASSWORD: smartchef
+      # Пароль локального dev — переопределяется POSTGRES_PASSWORD в .env.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-smartchef}
       POSTGRES_DB: smartchef
       TZ: Asia/Almaty
     volumes:
@@ -42,7 +43,7 @@ services:
     env_file:
       - .env
     environment:
-      DB_URL: postgresql+asyncpg://smartchef:smartchef@postgres:5432/smartchef
+      DB_URL: postgresql+asyncpg://smartchef:${POSTGRES_PASSWORD:-smartchef}@postgres:5432/smartchef
       REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:

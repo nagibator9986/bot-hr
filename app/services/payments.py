@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -20,6 +22,20 @@ class TariffInfo:
     tariff: Tariff
     price: int
     label: str
+
+
+def verify_hmac_signature(*, payload: bytes, signature: str, secret: str) -> bool:
+    """Constant-time HMAC-SHA256 проверка подписи вебхука платёжного провайдера.
+
+    Заготовка под будущие авто-платежи (telegram/kaspi): любой входящий вебхук
+    обязан пройти эту проверку, иначе запрос отклоняется — нельзя верить вебхукам
+    без проверки подписи (CLAUDE.md §9). Сейчас оплата ручная (claim → approve),
+    вебхуков нет, но утилита готова к подключению и покрыта тестами.
+    """
+    if not secret or not signature:
+        return False
+    expected = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
 
 
 def tariff_info(tariff: Tariff) -> TariffInfo:
