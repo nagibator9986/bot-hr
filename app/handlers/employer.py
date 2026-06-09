@@ -6,6 +6,7 @@ from contextlib import suppress
 from typing import Any
 
 from aiogram import F, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +44,13 @@ from app.states.employer import EmployerForm
 from app.utils.validators import clean_text, parse_phone, parse_salary
 
 router = Router(name="employer")
+
+# Поля вакансии, без которых её нельзя сохранить (общие для нового и
+# возвращающегося работодателя).
+_REQUIRED_VACANCY_FIELDS: tuple[str, ...] = (
+    "position", "position_normalized", "city", "salary_min", "salary_max",
+    "schedule", "address",
+)
 
 
 # ───────────────────── РЕГИСТРАЦИЯ КОМПАНИИ (новый работодатель) ────────────
@@ -278,6 +286,11 @@ async def on_confirm(
     data = await state.get_data()
     await state.clear()
 
+    # Стейт мог частично потеряться (TTL Redis/рестарт) — не падаем на data[...].
+    if not all(data.get(field) is not None for field in _REQUIRED_VACANCY_FIELDS):
+        await show_main_menu(msg, Role.EMPLOYER, text=RU["form_incomplete_restart"])
+        return
+
     if data.get("is_returning"):
         await _save_returning(callback, msg, session, data)
     else:
@@ -288,7 +301,7 @@ async def _save_returning(
     callback: CallbackQuery, msg: Message, session: AsyncSession, data: dict[str, Any]
 ) -> None:
     employers = EmployerRepo(session)
-    employer = await employers.get_by_id(data["employer_id"])
+    employer = await employers.get_by_id(data.get("employer_id", 0))
     if employer is None:
         await show_main_menu(msg, Role.EMPLOYER, text=RU["error_generic"])
         return
@@ -329,6 +342,9 @@ async def _save_new_employer(
     user: User,
     data: dict[str, Any],
 ) -> None:
+    if any(data.get(field) is None for field in ("company", "contact_person", "phone")):
+        await show_main_menu(msg, Role.EMPLOYER, text=RU["form_incomplete_restart"])
+        return
     employer = await EmployerRepo(session).upsert(
         user_id=user.id,
         company_name=data["company"],
@@ -440,3 +456,11 @@ async def on_vacancy_action(
             await callback.message.edit_reply_markup(
                 reply_markup=vacancy_actions_keyboard(vacancy.id, is_closed=is_closed)
             )
+
+
+# ───────────────── Подстраховка: непонятный ввод в форме работодателя ───────
+@router.message(StateFilter(EmployerForm))
+async def employer_form_fallback(message: Message) -> None:
+    """Ввод, не подошедший ни одному шаговому хендлеру, — подсказка вместо тупика.
+    Регистрируется последним, поэтому специфичные хендлеры срабатывают раньше."""
+    await message.answer(RU["form_expects_input"])

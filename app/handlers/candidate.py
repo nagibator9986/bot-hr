@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import suppress
 
 from aiogram import F, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -250,8 +251,26 @@ async def on_contact_typed(message: Message, state: FSMContext) -> None:
     await _finish_contact(message, state, phone)
 
 
+# Поля, без которых анкету нельзя ни показать в превью, ни сохранить в БД
+# (опыт может быть 0 — поэтому проверяем именно "is not None", а не truthiness).
+_REQUIRED_CANDIDATE_FIELDS: tuple[str, ...] = (
+    "name", "age", "city", "desired_position", "position_normalized",
+    "experience_years", "schedule", "expected_salary", "contact", "photo_file_id",
+)
+
+
+def _candidate_data_complete(data: dict[str, object]) -> bool:
+    return all(data.get(field) is not None for field in _REQUIRED_CANDIDATE_FIELDS)
+
+
 async def _finish_contact(message: Message, state: FSMContext, phone: str) -> None:
     data = await state.update_data(contact=phone)
+    # Стейт мог частично потеряться (TTL Redis, рестарт на полпути) — тогда
+    # обращение к data[...] ниже упало бы KeyError. Мягко возвращаем к /start.
+    if not _candidate_data_complete(data):
+        await state.clear()
+        await message.answer(RU["form_incomplete_restart"])
+        return
     await state.set_state(CandidateForm.confirm)
     preview = Candidate(
         name=data["name"],
@@ -294,6 +313,10 @@ async def on_confirm(
         return
 
     data = await state.get_data()
+    if not _candidate_data_complete(data):
+        await state.clear()
+        await show_main_menu(msg, user.role, text=RU["form_incomplete_restart"])
+        return
     candidate = await _save_candidate(session, user.id, data)
     await state.clear()
 
@@ -539,3 +562,12 @@ async def edit_contact_typed(message: Message, state: FSMContext, session: Async
         await message.answer(RU["validation_phone"])
         return
     await _apply_edit(message, state, session, user, contact=phone)
+
+
+# ───────────────── Подстраховка: непонятный ввод на шагах анкеты ────────────
+@router.message(StateFilter(CandidateForm, CandidateEdit))
+async def candidate_form_fallback(message: Message) -> None:
+    """Ввод, не подошедший ни одному шаговому хендлеру (стикер/фото вместо текста),
+    не должен оставлять пользователя в тихом тупике. Регистрируется последним,
+    поэтому специфичные хендлеры шагов всегда срабатывают раньше."""
+    await message.answer(RU["form_expects_input"])
