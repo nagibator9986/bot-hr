@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import PaymentClaimStatus, Tariff
@@ -29,11 +29,12 @@ class PromoterRepo:
         return await self.session.get(Promoter, promoter_id)
 
     async def get_by_code(self, code: str) -> Promoter | None:
-        stmt = select(Promoter).where(Promoter.code == code)
+        # Регистронезависимо: пользователь может ввести код в любом регистре.
+        stmt = select(Promoter).where(func.lower(Promoter.code) == code.strip().lower())
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
-    async def list_all(self) -> list[Promoter]:
-        stmt = select(Promoter).order_by(Promoter.created_at.desc())
+    async def list_all(self, *, limit: int = 100) -> list[Promoter]:
+        stmt = select(Promoter).order_by(Promoter.created_at.desc()).limit(limit)
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def add_earned(self, promoter: Promoter, amount: int) -> None:
@@ -76,14 +77,16 @@ class PromoCodeRepo:
         return promo
 
     async def get_by_code(self, code: str) -> PromoCode | None:
-        stmt = select(PromoCode).where(PromoCode.code == code)
+        # Регистронезависимо: коды генерируются в разном регистре, а вводят их руками.
+        stmt = select(PromoCode).where(func.lower(PromoCode.code) == code.strip().lower())
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
-    async def list_active(self) -> list[PromoCode]:
+    async def list_active(self, *, limit: int = 100) -> list[PromoCode]:
         stmt = (
             select(PromoCode)
             .where(PromoCode.is_active.is_(True))
             .order_by(PromoCode.created_at.desc())
+            .limit(limit)
         )
         return list((await self.session.execute(stmt)).scalars().all())
 
@@ -127,11 +130,12 @@ class PaymentClaimRepo:
     async def get(self, claim_id: int) -> PaymentClaim | None:
         return await self.session.get(PaymentClaim, claim_id)
 
-    async def list_pending(self) -> list[PaymentClaim]:
+    async def list_pending(self, *, limit: int = 100) -> list[PaymentClaim]:
         stmt = (
             select(PaymentClaim)
             .where(PaymentClaim.status == PaymentClaimStatus.PENDING)
             .order_by(PaymentClaim.created_at)
+            .limit(limit)
         )
         return list((await self.session.execute(stmt)).scalars().all())
 

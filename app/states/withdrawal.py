@@ -7,4 +7,3 @@ from aiogram.fsm.state import State, StatesGroup
 
 class WithdrawalForm(StatesGroup):
     kaspi_phone = State()
-    confirm = State()

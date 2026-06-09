@@ -435,7 +435,6 @@ RU: MappingProxyType[str, str] = MappingProxyType({
     "expiry_reminder_0d": "⚠️ Подписка истекает сегодня. Продлите доступ — /subscription.",
 
     # ── Реферальная программа ─────────────────────────────────────────────
-    "btn_invite": "🎁 Пригласить друга",
     "btn_balance": "💰 Мой баланс",
     "btn_withdraw": "💸 Вывести деньги",
     "referral_card": (

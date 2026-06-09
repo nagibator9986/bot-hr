@@ -47,14 +47,8 @@ class BrowseCB(CallbackData, prefix="brw"):
     action: str  # "next" | "stop"
 
 
-class MatchDecisionCB(CallbackData, prefix="match"):
-    match_id: int
-    action: str  # "accept" | "decline"
-
-
 class InterviewCB(CallbackData, prefix="iv"):
     match_id: int
-    action: str  # "propose"
 
 
 class InterviewSlotCB(CallbackData, prefix="ivslot"):

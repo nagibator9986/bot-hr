@@ -369,8 +369,13 @@ async def cmd_paid(message: Message, session: AsyncSession) -> None:
     if len(parts) != 2:
         await message.answer("Использование: /paid <id>")
         return
+    try:
+        req_id = int(parts[1])
+    except ValueError:
+        await message.answer("Неверный формат: /paid <id>")
+        return
     repo = WithdrawalRepo(session)
-    req = next((r for r in await repo.list_pending() if r.id == int(parts[1])), None)
+    req = next((r for r in await repo.list_pending() if r.id == req_id), None)
     if req is None:
         await message.answer("Заявка не найдена.")
         return

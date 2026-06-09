@@ -123,11 +123,12 @@ class ReferralRepo:
         rows = (await self.session.execute(stmt)).all()
         return [(int(r[0]), int(r[1]), int(r[2] or 0)) for r in rows]
 
-    async def list_for_referrer(self, referrer_id: int) -> list[Referral]:
+    async def list_for_referrer(self, referrer_id: int, *, limit: int = 100) -> list[Referral]:
         stmt = (
             select(Referral)
             .where(Referral.referrer_id == referrer_id)
             .order_by(Referral.created_at.desc())
+            .limit(limit)
         )
         return list((await self.session.execute(stmt)).scalars().all())
 
@@ -218,9 +219,12 @@ class WithdrawalRepo:
         await self.session.flush()
         return req
 
-    async def list_pending(self) -> list[WithdrawalRequest]:
-        stmt = select(WithdrawalRequest).where(
-            WithdrawalRequest.status == WithdrawalStatus.PENDING
+    async def list_pending(self, *, limit: int = 100) -> list[WithdrawalRequest]:
+        stmt = (
+            select(WithdrawalRequest)
+            .where(WithdrawalRequest.status == WithdrawalStatus.PENDING)
+            .order_by(WithdrawalRequest.created_at)
+            .limit(limit)
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())

@@ -186,7 +186,7 @@ def propose_interview_keyboard(match_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
         text=RU["btn_propose_interview"],
-        callback_data=InterviewCB(match_id=match_id, action="propose"),
+        callback_data=InterviewCB(match_id=match_id),
     )
     return builder.as_markup()
 

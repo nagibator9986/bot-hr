@@ -67,8 +67,13 @@ class VacancyRepo:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def list_active(self) -> list[Vacancy]:
-        stmt = select(Vacancy).where(Vacancy.status == VacancyStatus.ACTIVE)
+    async def list_active(self, *, limit: int = 100) -> list[Vacancy]:
+        stmt = (
+            select(Vacancy)
+            .where(Vacancy.status == VacancyStatus.ACTIVE)
+            .order_by(Vacancy.created_at.desc())
+            .limit(limit)
+        )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 

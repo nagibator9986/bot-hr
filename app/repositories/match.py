@@ -98,7 +98,11 @@ class MatchRepo:
         return match.is_mutual
 
     async def list_mutual_for_user(
-        self, *, candidate_id: int | None = None, employer_id: int | None = None
+        self,
+        *,
+        candidate_id: int | None = None,
+        employer_id: int | None = None,
+        limit: int = 50,
     ) -> list[Match]:
         """Взаимные матчи пользователя — для экрана «Мои отклики»."""
         stmt = (
@@ -116,6 +120,7 @@ class MatchRepo:
             stmt = stmt.where(Match.candidate_id == candidate_id)
         if employer_id is not None:
             stmt = stmt.join(Vacancy).where(Vacancy.employer_id == employer_id)
+        stmt = stmt.order_by(Match.updated_at.desc()).limit(limit)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
