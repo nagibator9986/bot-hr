@@ -164,10 +164,14 @@ class GeminiService:
         schema: dict[str, Any] | None = None,
         temperature: float = 0.2,
         max_tokens: int = 512,
+        request_timeout: float | None = None,
     ) -> str | None:
         """Один запрос к generateContent. Возвращает текст ответа или None при любой ошибке."""
         if not self.available:
             return None
+        effective_timeout = (
+            settings.gemini_timeout if request_timeout is None else request_timeout
+        )
 
         gen_config: dict[str, Any] = {
             "temperature": temperature,
@@ -196,7 +200,7 @@ class GeminiService:
                 url,
                 json=body,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=settings.gemini_timeout),
+                timeout=aiohttp.ClientTimeout(total=effective_timeout),
             ) as resp:
                 if resp.status != 200:
                     detail = (await resp.text())[:300]
@@ -357,6 +361,16 @@ class GeminiService:
         """
         if not self.available:
             return None
+        # Кеш по паре (кандидат, вакансия): повторный показ той же карточки или
+        # обратное направление просмотра не дёргают сеть и дают стабильный текст.
+        key = (
+            f"explain:{viewer}:"
+            f"{candidate_desc.strip().lower()[:200]}|{vacancy_desc.strip().lower()[:200]}"
+        )
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached or None
+
         if viewer == "candidate":
             task = "Объясни кандидату одним коротким предложением, чем эта вакансия ему подходит."
         else:
@@ -366,10 +380,20 @@ class GeminiService:
             "предложение (до 18 слов), без вступлений и кавычек. Только по фактам ниже."
         )
         prompt = f"{task}\n\nКандидат: {candidate_desc}\n\nВакансия: {vacancy_desc}"
-        raw = await self._generate(prompt, system=system, temperature=0.4, max_tokens=96)
+        # Подсказка — необязательная: ограничиваем ожидание, чтобы медленный AI
+        # не тормозил листание карточек (фолбэк — карточка без подсказки).
+        raw = await self._generate(
+            prompt,
+            system=system,
+            temperature=0.4,
+            max_tokens=96,
+            request_timeout=min(settings.gemini_timeout, 6.0),
+        )
         if raw is None:
-            return None
-        return raw.strip().strip('"').splitlines()[0][:280] or None
+            return None  # транзиентный сбой не кешируем — попробуем снова позже
+        hint = raw.strip().strip('"').splitlines()[0][:280]
+        self._cache.put(key, hint)
+        return hint or None
 
     # ── 5. «Причёсывание» текста «о себе» кандидата ─────────────────────────
     async def polish_about(self, raw_text: str) -> str | None:
