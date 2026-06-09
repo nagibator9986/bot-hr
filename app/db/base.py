@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, ClassVar
 
-from sqlalchemy import MetaData
+from sqlalchemy import DateTime, MetaData
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -21,7 +21,12 @@ NAMING_CONVENTION = {
 
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
-    type_annotation_map: ClassVar[dict[type, Any]] = {}
+    # Любой `Mapped[datetime]` (в т.ч. created_at/updated_at из миксина) маппится
+    # в TIMESTAMP WITH TIME ZONE — храним всё в UTC, выводим в Asia/Almaty
+    # (CLAUDE.md §10.6). Доменные поля времени и так объявлены явно с timezone=True.
+    type_annotation_map: ClassVar[dict[type, Any]] = {
+        datetime: DateTime(timezone=True),
+    }
 
 
 class TimestampMixin:
