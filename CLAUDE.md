@@ -185,6 +185,17 @@ Google Sheets — **вторичная** проекция БД для админ
 - **ReferralBalance** — `user_id`, `balance` (текущий), `total_earned`, `total_withdrawn`.
 - **WithdrawalRequest** — заявка на вывод: `user_id`, `amount`, `kaspi_phone`, `status` (`pending | paid | rejected`), таймстампы.
 
+> **Реализация ушла вперёд этого списка** (актуальная схема — в моделях и
+> миграциях, см. [docs/DATABASE.md](./docs/DATABASE.md)). Добавлены сущности:
+> **Promoter**, **PromoCode** (промокоды/промоутеры), **PaymentClaim** (заявка
+> «Я оплатил Kaspi» → апрув админом), **ConversationMessage** (лог диалога).
+> У `Employer` появились поля верификации (`bin`, `phone_verified`,
+> `verification_status`, ...). У `Vacancy` зарплата — вилка `salary_min/max`
+> (а не одно `salary`). У `Match` — свайп-реакции (`candidate_reaction`,
+> `employer_reaction`) и `decision = mutual`. Подбор — свайпами, не push'ом.
+> Partial-unique активной подписки построен по `user_id` (строже, чем по
+> `(user_id, tariff)`). Служебные `created_at/updated_at` — `timestamptz`.
+
 ### Enum'ы → `app/core/constants.py`
 
 ```python
@@ -340,7 +351,11 @@ class Settings(BaseSettings):
     gemini_enabled: bool = True
     log_level: str = "INFO"
     environment: Literal["dev", "stage", "prod"] = "dev"
-    model_config = SettingsConfigDict(env_file=".env", extra="forbid")
+    # extra="ignore" (а не "forbid"): pydantic-settings читает и OS-окружение,
+    # где всегда есть посторонние переменные (PATH, HOME, ...) — "forbid" уронил
+    # бы старт. Опечатку в имени ключа это, к сожалению, не ловит — сверяйтесь
+    # с .env.example.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 ```
 
 `settings.ai_available` — единый предикат «можно ли звать AI» (включён И есть ключ).
@@ -415,6 +430,12 @@ make psql             # psql внутрь контейнера БД
 | **5. Referrals** | Реф-ссылки, кешбек, заявка на вывод | 300 ₸ начисляется после оплаты friend'ом |
 | **6. Hardening** | Метрики, алерты, нагрузочное, защита от фрода | 99% аптайм, < 500 мс p95 latency хендлеров |
 | **7. WhatsApp** | Второй транспорт через WhatsApp Business API | Те же сценарии работают в WA |
+
+**Состояние (актуальное):** фазы 0-5 реализованы. CI lint/type/test —
+`.github/workflows/ci.yml` (ruff + mypy --strict + pytest). Google Sheets-зеркало
+подключено и активируется при заданном `GOOGLE_SHEET_ID` (иначе спит). Платежи —
+ручной Kaspi-flow (claim → апрув админом) + промокоды; авто-вебхуки и WhatsApp —
+впереди (заготовка проверки подписи — `payments.verify_hmac_signature`).
 
 ---
 

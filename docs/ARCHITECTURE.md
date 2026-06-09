@@ -67,18 +67,29 @@
 
 | Сервис | Ответственность |
 |---|---|
-| `intent.py` | Распознавание намерения (rule-based + леммы). |
+| `intent.py` | Распознавание намерения (rule-based + леммы, AI-фолбэк). |
+| `gemini.py` | Клиент Google Gemini (7 AI-точек, graceful degradation, LRU-кеш). |
+| `enrichment.py` | Обёртки «правила → AI»: должность, требования, слоты для хендлеров. |
 | `matching.py` | Скоринг пары (кандидат, вакансия), поиск кандидатов / вакансий. |
+| `browse.py` | Свайп-движок: следующая карточка, реакция, взаимный матч. |
+| `profile.py` | Рендер карточек/анкет, маскировка данных в preview-режиме. |
 | `access_control.py` | Проверка активной подписки и лимита просмотров. |
 | `payments.py` | Идемпотентная активация подписки по `provider_payment_id`. |
-| `referrals.py` | Привязка реферера, начисление бонуса после оплаты, заявка на вывод. |
+| `promo.py` | Активация подписки по промокоду (бесплатно, без реф-бонуса). |
+| `referrals.py` | Привязка реферера/промоутера, начисление после оплаты, вывод. |
+| `verification.py` | Модерация работодателя (pending → approve/reject). |
 | `scheduler.py` | APScheduler job'ы: напоминания 24/2 ч, истечение подписки. |
-| `notifications.py` | Тонкая обёртка над Bot.send_message. |
-| `google_sheets.py` | Async-фасад над gspread, не ломает сценарий при сбое. |
+| `notifications.py` | Рассылка по событиям + авто-уведомление о новых матчах. |
+| `conversation.py` | Лог входящих/исходящих сообщений (история для админа и AI-контекст). |
+| `roles.py` | Определение/переключение роли пользователя. |
+| `google_sheets.py` | Async-фасад над gspread, зеркало БД; не ломает сценарий при сбое. |
 
 ### 5. Repositories
 
-Чистый data-access на SQLAlchemy 2.0 async. Один класс на агрегат: `UserRepo`, `CandidateRepo`, `VacancyRepo`, `MatchRepo`, `InterviewRepo`, `SubscriptionRepo`, `PaymentRepo`, `ReferralRepo`, `BalanceRepo`, `WithdrawalRepo`.
+Чистый data-access на SQLAlchemy 2.0 async. Один класс на агрегат: `UserRepo`, `CandidateRepo`, `EmployerRepo`, `VacancyRepo`, `MatchRepo`, `InterviewRepo`, `SubscriptionRepo`, `PaymentRepo`, `PaymentClaimRepo`, `ReferralRepo`, `BalanceRepo`, `WithdrawalRepo`, `PromoterRepo`, `PromoCodeRepo`, `ConversationRepo`.
+
+Денежные счётчики/балансы обновляются атомарным `UPDATE ... SET x = x + n`
+(а не read-modify-write) — защита от потерянных обновлений при гонке.
 
 ### 6. Хранилища
 
@@ -88,34 +99,37 @@
 
 ## Потоки данных
 
-### Поток 1: Соискатель → Match
+> **Подбор реализован свайпами (Дайвинчик-стиль), а не push-уведомлениями.**
+> Кандидат листает вакансии, работодатель — кандидатов; контакты открываются
+> при взаимном лайке. Push-уведомление `announce_new_*` лишь сообщает
+> противоположной стороне «появился новый вариант, загляните в листание».
+
+### Поток 1: Соискатель → свайп → взаимный матч
 
 ```
-/start → role=candidate → FSM CandidateForm (9 steps)
+/start → role=candidate → FSM CandidateForm (анкета + фото)
                           ↓ commit
                        Candidate row
                           ↓
-                MatchingService.find_vacancies_for_candidate
+        BrowseService.next_for_candidate (matching + дедуп показанных)
                           ↓
-                  Match (score ≥ 70)
+     карточка вакансии (❤️/👎, AI-подсказка «почему подходит»)
                           ↓
-        send_message(candidate, "Найдена вакансия... ✅/❌")
+        ❤️ → MatchRepo.react → если обе стороны лайкнули → decision = MUTUAL
 ```
 
-### Поток 2: Match → Interview
+### Поток 2: Взаимный матч → собеседование
 
 ```
-[✅] callback → Match.decision = accepted_by_candidate
-              ↓
-send_message(employer, "Хотите назначить?")
-              ↓
-employer sends slots → InterviewScheduling.employer_proposes_slots
-              ↓
-send slots to candidate → InterviewScheduling.candidate_chooses_slot
-              ↓
-[слот] callback → Interview row + APScheduler 2 reminder jobs
-              ↓
-send_message(both, "Записаны: addr / time")
+MUTUAL → обе стороны получают контакты (при активной подписке; иначе preview)
+       ↓
+работодатель: «📅 Предложить время» → 1-3 слота (строгий формат ДД.ММ ЧЧ:ММ или речь→AI)
+       ↓
+слоты уходят кандидату кнопками → кандидат выбирает слот
+       ↓
+Interview(scheduled_at, status=scheduled) + APScheduler 2 job'а (24 ч / 2 ч)
+       ↓
+обе стороны уведомлены; строка-зеркало в Google Sheets (лист Interviews)
 ```
 
 ### Поток 3: Платёж → активация

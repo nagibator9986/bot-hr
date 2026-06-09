@@ -68,6 +68,9 @@ make migration m="add referrals table"  # новая миграция
 make psql       # консоль PostgreSQL
 ```
 
+> CI: `.github/workflows/ci.yml` прогоняет `ruff check` + `mypy --strict` + `pytest`
+> на каждый push и pull request.
+
 ## Railway
 
 Бот деплоится как **worker-сервис** (long-polling, без HTTP-порта и healthcheck). Сборка через `Dockerfile`, миграции прогоняются как pre-deploy command.
