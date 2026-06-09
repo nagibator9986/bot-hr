@@ -28,6 +28,7 @@ from app.repositories.candidate import CandidateRepo
 from app.repositories.match import InterviewRepo, MatchRepo
 from app.services.access_control import AccessControlService
 from app.services.enrichment import resolve_interview_slots
+from app.services.google_sheets import google_sheets
 from app.services.notifications import NotificationService
 from app.services.profile import position_label
 from app.services.scheduler import schedule_interview_reminders
@@ -137,6 +138,15 @@ async def on_slot_chosen(
     company = vacancy.employer.company_name if vacancy.employer else "—"
     position = position_label(vacancy.position_normalized, vacancy.position)
     when = format_dt(chosen)
+
+    await google_sheets.mirror_interview(
+        interview_id=interview.id,
+        candidate_name=candidate.name,
+        vacancy_position=position,
+        company=company,
+        scheduled_at=chosen,
+        status=interview.status,
+    )
 
     await callback.answer()
     if isinstance(callback.message, Message):

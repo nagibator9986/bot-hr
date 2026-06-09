@@ -35,6 +35,7 @@ from app.locales import RU
 from app.repositories.vacancy import EmployerRepo, VacancyRepo
 from app.services.access_control import AccessControlService
 from app.services.enrichment import resolve_position, structure_requirements
+from app.services.google_sheets import google_sheets
 from app.services.notifications import announce_new_vacancy
 from app.services.profile import render_vacancy_summary
 from app.services.verification import VerificationService
@@ -308,6 +309,7 @@ async def _save_returning(
         photo_file_id=data.get("photo_file_id"),
         status=VacancyStatus.ACTIVE if verified else VacancyStatus.IN_PROGRESS,
     )
+    await google_sheets.mirror_vacancy(vacancy, company=employer.company_name)
     if verified:
         matches = await announce_new_vacancy(callback.bot, session, vacancy)  # type: ignore[arg-type]
         text = RU["vacancy_saved"]
@@ -352,6 +354,8 @@ async def _save_new_employer(
         photo_file_id=data.get("photo_file_id"),
         status=VacancyStatus.IN_PROGRESS,
     )
+    await google_sheets.mirror_employer(employer)
+    await google_sheets.mirror_vacancy(vacancy, company=employer.company_name)
     approved = await VerificationService(session).route_after_registration(
         callback.bot, employer, vacancy  # type: ignore[arg-type]
     )

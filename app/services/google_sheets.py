@@ -10,7 +10,7 @@ import asyncio
 import base64
 import json
 from datetime import datetime
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -19,6 +19,12 @@ from pydantic import SecretStr
 
 from app.config import settings
 from app.core.logger import get_logger
+from app.utils.time import utcnow
+
+if TYPE_CHECKING:
+    from app.db.models.candidate import Candidate
+    from app.db.models.employer import Employer
+    from app.db.models.vacancy import Vacancy
 
 log = get_logger("sheets")
 
@@ -88,7 +94,13 @@ class GoogleSheetsService:
         )
         return cast(Credentials, creds)
 
+    @property
+    def enabled(self) -> bool:
+        return bool(settings.google_sheet_id)
+
     async def append_row(self, sheet_name: str, row: list[Any]) -> None:
+        if not self.enabled:
+            return  # синк не настроен — не тратим поток и не шумим в логах
         try:
             await asyncio.to_thread(self._append_sync, sheet_name, row)
         except Exception as e:
@@ -108,6 +120,8 @@ class GoogleSheetsService:
     async def update_status(
         self, sheet_name: str, row_id: int, status: str, *, id_column: str = "A"
     ) -> None:
+        if not self.enabled:
+            return
         try:
             await asyncio.to_thread(self._update_status_sync, sheet_name, row_id, status, id_column)
         except Exception as e:
@@ -134,6 +148,91 @@ class GoogleSheetsService:
             return
         sheet.update_cell(cell.row, status_col, status)
 
+    # ── Высокоуровневое зеркалирование доменных событий (см. docs/SHEETS.md) ──
+    async def mirror_candidate(self, candidate: Candidate) -> None:
+        """Создана анкета → строка в лист Applicants."""
+        await self.append_row(
+            SHEET_APPLICANTS,
+            [
+                candidate.id,
+                candidate.name,
+                candidate.age,
+                candidate.city,
+                candidate.desired_position,
+                candidate.experience_years,
+                int(candidate.expected_salary),
+                candidate.schedule,
+                candidate.contact,
+                candidate.status,
+                utcnow(),
+            ],
+        )
+
+    async def mirror_employer(self, employer: Employer) -> None:
+        """Создан работодатель → строка в лист Employers."""
+        await self.append_row(
+            SHEET_EMPLOYERS,
+            [
+                employer.id,
+                employer.company_name,
+                employer.city,
+                employer.contact_person,
+                employer.phone,
+                utcnow(),
+            ],
+        )
+
+    async def mirror_vacancy(self, vacancy: Vacancy, *, company: str) -> None:
+        """Создана вакансия → строка в лист Vacancies."""
+        await self.append_row(
+            SHEET_VACANCIES,
+            [
+                vacancy.id,
+                company,
+                vacancy.position,
+                f"{int(vacancy.salary_min)}–{int(vacancy.salary_max)}",
+                vacancy.schedule,
+                vacancy.address,
+                _requirements_summary(vacancy.requirements),
+                vacancy.status,
+                utcnow(),
+            ],
+        )
+
+    async def mirror_interview(
+        self,
+        *,
+        interview_id: int,
+        candidate_name: str,
+        vacancy_position: str,
+        company: str,
+        scheduled_at: datetime,
+        status: str,
+    ) -> None:
+        """Назначено собеседование → строка в лист Interviews."""
+        await self.append_row(
+            SHEET_INTERVIEWS,
+            [
+                interview_id,
+                candidate_name,
+                vacancy_position,
+                company,
+                scheduled_at.date().isoformat(),
+                scheduled_at.strftime("%H:%M"),
+                status,
+            ],
+        )
+
+
+def _requirements_summary(requirements: Any) -> str:
+    """JSONB требований вакансии → короткая строка для листа."""
+    if not isinstance(requirements, dict):
+        return ""
+    skills = requirements.get("skills")
+    if isinstance(skills, list) and skills:
+        return ", ".join(str(s) for s in skills)
+    return str(requirements.get("summary") or requirements.get("raw") or "")
+
 
 def _stringify(v: Any) -> str:
     if isinstance(v, datetime):
@@ -141,3 +240,7 @@ def _stringify(v: Any) -> str:
     if v is None:
         return ""
     return str(v)
+
+
+# Синглтон — импортируется хендлерами как `from app.services.google_sheets import google_sheets`.
+google_sheets = GoogleSheetsService()

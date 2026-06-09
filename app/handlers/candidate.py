@@ -36,6 +36,7 @@ from app.repositories.candidate import CandidateRepo
 from app.services.access_control import AccessControlService
 from app.services.enrichment import resolve_position
 from app.services.gemini import gemini
+from app.services.google_sheets import google_sheets
 from app.services.notifications import announce_new_candidate
 from app.services.profile import render_candidate_summary
 from app.states.candidate import CandidateEdit, CandidateForm
@@ -296,6 +297,7 @@ async def on_confirm(
     candidate = await _save_candidate(session, user.id, data)
     await state.clear()
 
+    await google_sheets.mirror_candidate(candidate)
     matches = await announce_new_candidate(callback.bot, session, candidate)  # type: ignore[arg-type]
     text = RU["candidate_saved"]
     if matches:
